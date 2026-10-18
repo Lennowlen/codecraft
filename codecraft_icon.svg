@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Matte dark zinc chassis (Zed / VS Code / Cursor style) -->
+    <linearGradient id="iconBase" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#18181B"/>
+      <stop offset="100%" stop-color="#0E0E11"/>
+    </linearGradient>
+
+    <!-- Razor-thin border stroke -->
+    <linearGradient id="iconBorder" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3F3F46" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#27272A" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <!-- Architectural geometric glyph gradient (Subtle Cyan to Deep Cobalt) -->
+    <linearGradient id="glyphGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="60%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+
+    <linearGradient id="facetHighlight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#BAE6FD"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+
+    <linearGradient id="foldShadow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0369A1"/>
+      <stop offset="100%" stop-color="#075985"/>
+    </linearGradient>
+
+    <!-- Dark subtle drop shadow -->
+    <filter id="crispShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.7"/>
+    </filter>
+  </defs>
+
+  <!-- Background Squircle Container (Engineered 112px radius) -->
+  <rect x="28" y="28" width="456" height="456" rx="112" fill="url(#iconBase)" filter="url(#crispShadow)"/>
+  <rect x="28" y="28" width="456" height="456" rx="112" fill="none" stroke="url(#iconBorder)" stroke-width="2"/>
+
+  <!-- Geometric Architectural Emblem (Zed / Neovim / VS Code fusion) -->
+  <!-- Outer Monolithic Hex-Bracket Shape -->
+  <g transform="translate(256, 256)">
+    <!-- Left Wing (Bracket Craft) -->
+    <path d="M -90 -120 
+             L -30 -120 
+             L -100 -20 
+             L -30 80 
+             L -90 80 
+             L -150 -20 Z" 
+          fill="url(#facetHighlight)"/>
+
+    <!-- Right Wing Fold (Overlapping Precision Polygon) -->
+    <path d="M 90 120 
+             L 30 120 
+             L 100 20 
+             L 30 -80 
+             L 90 -80 
+             L 150 20 Z" 
+          fill="url(#glyphGrad)"/>
+
+    <!-- Central Interlocking Code Chisel -->
+    <path d="M -20 -140 
+             L 35 -140 
+             L -35 140 
+             L -90 140 Z" 
+          fill="url(#foldShadow)" opacity="0.9"/>
+
+    <path d="M -5 -110 
+             L 50 -110 
+             L -20 70 
+             L -75 70 Z" 
+          fill="url(#facetHighlight)" opacity="0.95"/>
+
+    <!-- Geometric Intersection Diamond (Compiler Pivot) -->
+    <polygon points="0,-16 24,0 0,16 -24,0" fill="#0C0C0E"/>
+    <polygon points="0,-10 15,0 0,10 -15,0" fill="#38BDF8"/>
+  </g>
+</svg>
