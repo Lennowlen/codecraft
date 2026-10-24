@@ -1,0 +1,17 @@
+[package]
+name = "codecraft-toolchain"
+version = "0.1.0"
+edition = "2021"
+description = "Pluggable runner, Java ECJ/D8 toolchain & PTY subprocess capture for CodeCraft"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+thiserror = "1.0"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["process", "term", "signal", "fs"] }
+
+[dev-dependencies]
+tempfile = "3.8"

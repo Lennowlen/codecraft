@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "crates/codecraft-core",
+    "crates/codecraft-toolchain",
+    "crates/codecraft-ui",
+    "crates/codecraft-android",
+]
+resolver = "2"
+
+[patch.crates-io]
+winit = { path = "C:/Users/ThinkPad/Projects/artcraft-mobile/winit-patched" }
+
+
