@@ -279,7 +279,6 @@ impl eframe::App for CodeCraftApp {
                         let is_exp = self.layout.active_activity_tab == ActivityBarTab::Explorer && self.layout.sidebar_visible;
                         let exp_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
                         if is_exp {
-                            ui.painter().rect_filled(exp_rect, 4.0, bg_sidebar);
                             ui.painter().rect_filled(
                                 egui::Rect::from_min_size(egui::pos2(act_rect.left(), exp_rect.top() + 4.0), egui::vec2(2.5, 24.0)),
                                 1.0,
@@ -295,7 +294,6 @@ impl eframe::App for CodeCraftApp {
                         let is_search = self.layout.active_activity_tab == ActivityBarTab::Search && self.layout.sidebar_visible;
                         let search_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
                         if is_search {
-                            ui.painter().rect_filled(search_rect, 4.0, bg_sidebar);
                             ui.painter().rect_filled(
                                 egui::Rect::from_min_size(egui::pos2(act_rect.left(), search_rect.top() + 4.0), egui::vec2(2.5, 24.0)),
                                 1.0,
@@ -311,7 +309,6 @@ impl eframe::App for CodeCraftApp {
                         let is_scm = self.layout.active_activity_tab == ActivityBarTab::SourceControl && self.layout.sidebar_visible;
                         let scm_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
                         if is_scm {
-                            ui.painter().rect_filled(scm_rect, 4.0, bg_sidebar);
                             ui.painter().rect_filled(
                                 egui::Rect::from_min_size(egui::pos2(act_rect.left(), scm_rect.top() + 4.0), egui::vec2(2.5, 24.0)),
                                 1.0,
@@ -327,7 +324,6 @@ impl eframe::App for CodeCraftApp {
                         let is_ext = self.layout.active_activity_tab == ActivityBarTab::Extensions && self.layout.sidebar_visible;
                         let ext_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
                         if is_ext {
-                            ui.painter().rect_filled(ext_rect, 4.0, bg_sidebar);
                             ui.painter().rect_filled(
                                 egui::Rect::from_min_size(egui::pos2(act_rect.left(), ext_rect.top() + 4.0), egui::vec2(2.5, 24.0)),
                                 1.0,
@@ -595,36 +591,41 @@ impl eframe::App for CodeCraftApp {
                     let gutter_width = 46.0;
 
                     ui_at_rect(ui, editor_body_rect, |ui| {
-                        egui::ScrollArea::both()
-                            .id_salt("editor_scroll_area")
-                            .auto_shrink([false, false])
-                            .scroll_source(egui::scroll_area::ScrollSource {
-                                mouse_wheel: true,
-                                drag: egui::scroll_area::DragScroll::Always,
-                                scroll_bar: true,
-                            })
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
-                                    let gutter_total_h = (line_count as f32) * row_h;
-                                    let g_rect = ui.allocate_space(egui::vec2(gutter_width, gutter_total_h)).1;
-                                    ui.painter().rect_filled(g_rect, 0.0, bg_app);
-                                    ui.painter().line_segment(
-                                        [egui::pos2(g_rect.right(), g_rect.top()), egui::pos2(g_rect.right(), g_rect.bottom())],
-                                        egui::Stroke::new(1.0, border_subtle),
+                        ui.horizontal_top(|ui| {
+                            let total_avail_h = ui.available_height();
+
+                            // 1. Fixed Gutter Left Strip (Always glued to top)
+                            let g_rect = ui.allocate_space(egui::vec2(gutter_width, total_avail_h)).1;
+                            ui.painter().rect_filled(g_rect, 0.0, bg_app);
+                            ui.painter().line_segment(
+                                [egui::pos2(g_rect.right(), g_rect.top()), egui::pos2(g_rect.right(), g_rect.bottom())],
+                                egui::Stroke::new(1.0, border_subtle),
+                            );
+
+                            let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                            for i in 1..=line_count {
+                                let y = g_rect.top() + (i as f32 - 1.0) * row_h + row_h * 0.5;
+                                if y <= g_rect.bottom() {
+                                    ui.painter().text(
+                                        egui::pos2(g_rect.right() - 8.0, y),
+                                        egui::Align2::RIGHT_CENTER,
+                                        format!("{}", i),
+                                        egui::FontId::monospace(13.0),
+                                        fg_muted,
                                     );
+                                }
+                            }
 
-                                    for i in 1..=line_count {
-                                        let y = g_rect.top() + (i as f32 - 1.0) * row_h + row_h * 0.5;
-                                        ui.painter().text(
-                                            egui::pos2(g_rect.right() - 8.0, y),
-                                            egui::Align2::RIGHT_CENTER,
-                                            format!("{}", i),
-                                            egui::FontId::monospace(13.0),
-                                            fg_muted,
-                                        );
-                                    }
-
+                            // 2. Editor Text Area (Glued to top, taking full remaining width and height)
+                            egui::ScrollArea::both()
+                                .id_salt("editor_scroll_area")
+                                .auto_shrink([false, false])
+                                .scroll_source(egui::scroll_area::ScrollSource {
+                                    mouse_wheel: true,
+                                    drag: egui::scroll_area::DragScroll::Always,
+                                    scroll_bar: true,
+                                })
+                                .show(ui, |ui| {
                                     let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
                                         let job = codecraft_ui::render_syntax_job(buf.as_str(), lang_id, &theme_clone, 14.0, f32::INFINITY);
                                         ui.painter().layout_job(job)
@@ -646,7 +647,7 @@ impl eframe::App for CodeCraftApp {
                                         }
                                     }
                                 });
-                            });
+                        });
                     });
                 });
             });
