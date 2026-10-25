@@ -51,6 +51,7 @@ pub struct HighlightSpan {
     pub color_rgba: [f32; 4],
 }
 
+#[derive(Debug, Clone)]
 pub struct SyntaxEngine {
     lang: LanguageId,
 }

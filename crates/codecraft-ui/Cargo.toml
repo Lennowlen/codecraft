@@ -7,4 +7,7 @@ edition = "2021"
 codecraft-core = { path = "../codecraft-core" }
 codecraft-toolchain = { path = "../codecraft-toolchain" }
 serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+serde_json = "1.0"
 log = "0.4"
+
