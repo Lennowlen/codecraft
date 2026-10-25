@@ -69,77 +69,109 @@ impl SyntaxEngine {
         self.lang
     }
 
-    /// Fast token highlight generation for single line / viewport slice (fallback & low RAM)
-    pub fn highlight_line(&self, line: &str, line_start_byte: usize) -> Vec<HighlightSpan> {
-        let mut spans = Vec::new();
+    /// Fast, robust tokenizer that decomposes text into styled syntax sections.
+    pub fn tokenize_line(&self, line: &str) -> Vec<(HighlightCategory, String)> {
+        let mut tokens = Vec::new();
         if line.is_empty() {
-            return spans;
+            return tokens;
         }
 
         let trimmed = line.trim_start();
         let leading_spaces = line.len() - trimmed.len();
-
-        // C / Java / Rust comments
-        if trimmed.starts_with("//") || trimmed.starts_with("#") {
-            spans.push(HighlightSpan {
-                start_byte: line_start_byte + leading_spaces,
-                end_byte: line_start_byte + line.len(),
-                category: HighlightCategory::Comment,
-                color_rgba: [0.42, 0.45, 0.50, 1.0], // Dark zinc comment
-            });
-            return spans;
+        if leading_spaces > 0 {
+            tokens.push((HighlightCategory::Normal, line[..leading_spaces].to_string()));
         }
 
-        // Keywords detection
+        let content = &line[leading_spaces..];
+        // Comments
+        if content.starts_with("//") || content.starts_with("#") {
+            tokens.push((HighlightCategory::Comment, content.to_string()));
+            return tokens;
+        }
+
         let keywords: &[&str] = match self.lang {
             LanguageId::Rust => &[
                 "fn", "pub", "struct", "enum", "impl", "use", "let", "mut", "match", "if", "else",
-                "for", "while", "loop", "return", "true", "false", "mod", "trait", "async", "await"
+                "for", "while", "loop", "return", "true", "false", "mod", "trait", "async", "await",
+                "crate", "super", "self", "Self", "where", "as", "const", "static", "type", "ref"
             ],
             LanguageId::Java => &[
                 "public", "private", "protected", "class", "interface", "void", "static", "final",
-                "new", "return", "if", "else", "for", "while", "try", "catch", "import", "package"
+                "new", "return", "if", "else", "for", "while", "try", "catch", "import", "package",
+                "extends", "implements", "this", "super", "null", "true", "false"
             ],
             LanguageId::Python => &[
                 "def", "class", "import", "from", "return", "if", "elif", "else", "for", "while",
-                "try", "except", "with", "as", "True", "False", "None", "self"
+                "try", "except", "with", "as", "True", "False", "None", "self", "pass", "lambda",
+                "yield", "in", "is", "not", "and", "or"
             ],
-            _ => &["fn", "class", "return", "if", "else", "for", "while"],
+            LanguageId::C | LanguageId::Cpp => &[
+                "int", "char", "float", "double", "void", "struct", "class", "return", "if", "else",
+                "for", "while", "switch", "case", "break", "continue", "include", "typedef", "static"
+            ],
+            _ => &["fn", "class", "return", "if", "else", "for", "while", "true", "false"],
         };
 
-        let mut byte_offset = 0;
-        for word in line.split_whitespace() {
-            let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-            let is_kw = keywords.contains(&clean_word);
-            let is_num = clean_word.parse::<f64>().is_ok();
+        let chars: Vec<char> = content.chars().collect();
+        let mut i = 0;
+        let len = chars.len();
 
-            if is_kw {
-                if let Some(pos) = line[byte_offset..].find(clean_word) {
-                    let start = byte_offset + pos;
-                    spans.push(HighlightSpan {
-                        start_byte: line_start_byte + start,
-                        end_byte: line_start_byte + start + clean_word.len(),
-                        category: HighlightCategory::Keyword,
-                        color_rgba: [0.77, 0.38, 0.88, 1.0], // Violet keyword
-                    });
+        while i < len {
+            let c = chars[i];
+
+            // String literal
+            if c == '"' || c == '\'' {
+                let quote = c;
+                let start = i;
+                i += 1;
+                while i < len {
+                    if chars[i] == '\\' && i + 1 < len {
+                        i += 2;
+                    } else if chars[i] == quote {
+                        i += 1;
+                        break;
+                    } else {
+                        i += 1;
+                    }
                 }
-            } else if is_num {
-                if let Some(pos) = line[byte_offset..].find(clean_word) {
-                    let start = byte_offset + pos;
-                    spans.push(HighlightSpan {
-                        start_byte: line_start_byte + start,
-                        end_byte: line_start_byte + start + clean_word.len(),
-                        category: HighlightCategory::Number,
-                        color_rgba: [0.98, 0.75, 0.14, 1.0], // Amber number
-                    });
+                let s: String = chars[start..i].iter().collect();
+                tokens.push((HighlightCategory::String, s));
+                continue;
+            }
+
+            // Word / Identifier / Number
+            if c.is_alphanumeric() || c == '_' {
+                let start = i;
+                while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                    i += 1;
                 }
+                let word: String = chars[start..i].iter().collect();
+                if keywords.contains(&word.as_str()) {
+                    tokens.push((HighlightCategory::Keyword, word));
+                } else if word.chars().all(|ch| ch.is_ascii_digit()) {
+                    tokens.push((HighlightCategory::Number, word));
+                } else if i < len && chars[i] == '(' {
+                    tokens.push((HighlightCategory::Function, word));
+                } else if word.starts_with(|ch: char| ch.is_uppercase()) {
+                    tokens.push((HighlightCategory::Type, word));
+                } else {
+                    tokens.push((HighlightCategory::Normal, word));
+                }
+                continue;
             }
-            byte_offset += word.len() + 1;
-            if byte_offset >= line.len() {
-                break;
+
+            // Punctuation / Operator / Whitespace
+            let start = i;
+            while i < len && !chars[i].is_alphanumeric() && chars[i] != '_' && chars[i] != '"' && chars[i] != '\'' {
+                if chars[i] == '/' && i + 1 < len && chars[i + 1] == '/' {
+                    break;
+                }
+                i += 1;
             }
+            let sym: String = chars[start..i].iter().collect();
+            tokens.push((HighlightCategory::Punctuation, sym));
         }
 
-        spans
+        tokens
     }
 }

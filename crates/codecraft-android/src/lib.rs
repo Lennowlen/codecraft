@@ -2,9 +2,11 @@ use android_activity::AndroidApp;
 use jni::objects::JValue;
 use std::path::{Path, PathBuf};
 
+use codecraft_core::syntax::LanguageId;
 use codecraft_core::workspace::{FileTreeNode, WorkspaceManager};
 use codecraft_toolchain::pty::TerminalStreamCapture;
 use codecraft_toolchain::runner::{RunnerManager, StreamType};
+use codecraft_ui::icons::Codicon;
 use codecraft_ui::layout::{ActivityBarTab, BottomDockTab, LayoutState};
 use codecraft_ui::theme::Theme;
 
@@ -61,6 +63,10 @@ fn to_color32(c: [f32; 4]) -> egui::Color32 {
     )
 }
 
+fn ui_at_rect<R>(ui: &mut egui::Ui, rect: egui::Rect, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), add_contents)
+}
+
 struct CodeCraftApp {
     workspace: WorkspaceManager,
     layout: LayoutState,
@@ -70,9 +76,8 @@ struct CodeCraftApp {
     status_msg: String,
     search_query: String,
     save_dialog_open: bool,
-    open_dialog_open: bool,
     new_filename: String,
-    // Terminal & Toolchain Runner
+    image_loader_installed: bool,
     terminal_capture: TerminalStreamCapture,
     terminal_logs: Vec<(StreamType, String)>,
     terminal_input: String,
@@ -85,18 +90,17 @@ impl Default for CodeCraftApp {
         let root = ensure_workspace_dir();
         let mut workspace = WorkspaceManager::new(&root);
 
-        // Template awal berkas main.rs
-        let default_code = r#"// CodeCraft Pure Rust Mobile IDE (Lapce Architecture)
-// Powered by Xi-Rope, WGPU, and Tree-sitter on MatePad 12X
+        let default_code = r#"// CodeCraft Mobile IDE (Lapce Architecture)
+// 1:1 Native Port with Lapce-Core, Xi-Rope, and Codicons
 
 fn main() {
-    println!("Hello from Lapce-grade CodeCraft IDE!");
+    println!("Hello from CodeCraft - Lapce Mobile!");
     let features = [
-        "Activity Bar",
-        "Source Control",
-        "Global Search",
-        "Multi-Tab Workspace",
-        "Terminal & Toolchain Dock",
+        "Authentic SVG Codicons",
+        "Syntax Highlighting",
+        "Line Numbers Gutter",
+        "Vertical Activity Bar",
+        "Integrated Terminal Dock",
     ];
     for f in features {
         println!(" - {}", f);
@@ -129,8 +133,8 @@ fn main() {
             status_msg: "Ready".to_string(),
             search_query: String::new(),
             save_dialog_open: false,
-            open_dialog_open: false,
             new_filename: "script.rs".to_string(),
+            image_loader_installed: false,
             terminal_capture,
             terminal_logs: Vec::new(),
             terminal_input: String::new(),
@@ -145,9 +149,6 @@ impl eframe::App for CodeCraftApp {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save_current_file();
         }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::O)) {
-            self.open_dialog_open = true;
-        }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::B)) {
             self.layout.toggle_sidebar();
         }
@@ -160,6 +161,11 @@ impl eframe::App for CodeCraftApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.image_loader_installed {
+            egui_extras::install_image_loaders(ctx);
+            self.image_loader_installed = true;
+        }
+
         let mut count = 0;
         while let Some(chunk) = self.terminal_capture.try_recv() {
             self.terminal_logs.push((chunk.stream_type, chunk.content));
@@ -181,6 +187,9 @@ impl eframe::App for CodeCraftApp {
         let bg_editor = to_color32(self.theme.bg_editor);
         let bg_sidebar = to_color32(self.theme.bg_sidebar);
         let bg_terminal = to_color32(self.theme.bg_terminal);
+        let bg_tabs = to_color32(self.theme.bg_tabs);
+        let fg_primary = to_color32(self.theme.fg_primary);
+        let fg_muted = to_color32(self.theme.fg_muted);
         let accent_lapce = to_color32(self.theme.accent_blue);
         let accent_em = to_color32(self.theme.accent_emerald);
         let border_subtle = to_color32(self.theme.border_subtle);
@@ -189,365 +198,537 @@ impl eframe::App for CodeCraftApp {
         ui.painter().rect_filled(full_rect, 0.0, bg_app);
 
         // TOP LAPCE TITLE BAR (Centered Search / Command Palette Bar + Actions)
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            // Lapce Logo / Branding
-            ui.label(egui::RichText::new("❖ CodeCraft").strong().size(15.0).color(accent_lapce));
-            ui.separator();
+        let title_bar_height = 36.0;
+        let title_bar_rect = egui::Rect::from_min_size(full_rect.min, egui::vec2(full_rect.width(), title_bar_height));
+        ui.painter().rect_filled(title_bar_rect, 0.0, bg_app);
 
-            // Centered Command Palette Trigger Button (Lapce Style)
-            let palette_btn = ui.add_sized(
-                egui::vec2(280.0, 24.0),
-                egui::Button::new(
-                    egui::RichText::new("🔍 Search files or commands (Ctrl+P)")
-                        .small()
-                        .color(egui::Color32::from_rgb(160, 160, 180)),
-                ),
-            );
-            if palette_btn.clicked() {
-                self.layout.toggle_command_palette();
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui_at_rect(ui, title_bar_rect, |ui| {
+            ui.horizontal_centered(|ui| {
                 ui.add_space(8.0);
-                if ui.button(egui::RichText::new("▶ Run").color(accent_em).strong()).clicked() {
-                    self.run_active_file();
+                let remote_rect = ui.allocate_space(egui::vec2(22.0, 22.0)).1;
+                ui.painter().rect_filled(remote_rect, 3.0, accent_lapce);
+                Codicon::Remote.paint(ui, remote_rect, 14.0, egui::Color32::WHITE);
+                ui.add_space(4.0);
+
+                ui.label(egui::RichText::new("CodeCraft").strong().size(13.5).color(fg_primary));
+                ui.add_space(16.0);
+
+                let palette_rect = ui.allocate_space(egui::vec2(320.0, 24.0)).1;
+                ui.painter().rect_filled(palette_rect, 4.0, bg_sidebar);
+                ui.painter().rect_stroke(palette_rect, 4.0, egui::Stroke::new(1.0, border_subtle), egui::StrokeKind::Inside);
+
+                let search_icon_rect = egui::Rect::from_min_size(
+                    egui::pos2(palette_rect.left() + 6.0, palette_rect.center().y - 7.0),
+                    egui::vec2(14.0, 14.0),
+                );
+                Codicon::Search.paint(ui, search_icon_rect, 14.0, fg_muted);
+
+                ui.painter().text(
+                    egui::pos2(palette_rect.left() + 26.0, palette_rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    "Search files or commands (Ctrl+P)",
+                    egui::FontId::proportional(12.0),
+                    fg_muted,
+                );
+
+                if ui.interact(palette_rect, ui.id().with("palette_btn"), egui::Sense::click()).clicked() {
+                    self.layout.toggle_command_palette();
                 }
-                if ui.button("💾 Save").clicked() {
-                    self.save_current_file();
-                }
-                if ui.button(if self.layout.terminal_visible { "💻 Terminal [ON]" } else { "💻 Terminal" }).clicked() {
-                    self.layout.toggle_terminal();
-                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(8.0);
+                    let run_btn = ui.button(egui::RichText::new("▶ Run").color(accent_em).strong());
+                    if run_btn.clicked() {
+                        self.run_active_file();
+                    }
+                    ui.add_space(4.0);
+                    let term_btn = ui.button(if self.layout.terminal_visible { "Terminal [ON]" } else { "Terminal" });
+                    if term_btn.clicked() {
+                        self.layout.toggle_terminal();
+                    }
+                    ui.add_space(4.0);
+                    if ui.button("Save").clicked() {
+                        self.save_current_file();
+                    }
+                });
             });
         });
 
         ui.painter().line_segment(
-            [egui::pos2(full_rect.left(), ui.cursor().top()), egui::pos2(full_rect.right(), ui.cursor().top())],
+            [egui::pos2(full_rect.left(), title_bar_rect.bottom()), egui::pos2(full_rect.right(), title_bar_rect.bottom())],
             egui::Stroke::new(1.0, border_subtle),
         );
-        ui.add_space(1.0);
 
-        // LAPCE MAIN CONTAINER: LEFT ACTIVITY BAR + SIDEBAR + WORKSPACE + BOTTOM DOCK
         let term_height = if self.layout.terminal_visible { self.layout.terminal_height } else { 0.0 };
-        let accessory_height = if self.layout.accessory_bar_visible { 40.0 } else { 0.0 };
-        let body_height = (full_rect.height() - ui.cursor().top() - term_height - accessory_height - 28.0).max(100.0);
+        let accessory_height = if self.layout.accessory_bar_visible { 38.0 } else { 0.0 };
+        let body_top = title_bar_rect.bottom();
+        let body_height = (full_rect.height() - body_top - term_height - accessory_height - 24.0).max(100.0);
 
-        ui.horizontal(|ui| {
-            // 1. VERTICAL ACTIVITY BAR (Lapce Signature Left Strip)
-            let act_width = 46.0;
-            ui.allocate_ui_with_layout(
-                egui::vec2(act_width, body_height),
-                egui::Layout::top_down(egui::Align::Center),
-                |ui| {
-                    ui.painter().rect_filled(ui.max_rect(), 0.0, bg_app);
-                    ui.add_space(8.0);
+        let body_rect = egui::Rect::from_min_size(egui::pos2(full_rect.left(), body_top), egui::vec2(full_rect.width(), body_height));
 
-                    // Explorer Icon
-                    let is_exp = self.layout.active_activity_tab == ActivityBarTab::Explorer && self.layout.sidebar_visible;
-                    if ui.selectable_label(is_exp, egui::RichText::new("📁").size(18.0))
-                        .on_hover_text("Explorer (Ctrl+Shift+E)")
-                        .clicked()
-                    {
-                        self.layout.set_activity_tab(ActivityBarTab::Explorer);
-                    }
-                    ui.add_space(8.0);
+        ui_at_rect(ui, body_rect, |ui| {
+            ui.horizontal(|ui| {
+                let act_width = 44.0;
+                let act_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(act_width, body_height));
+                ui.painter().rect_filled(act_rect, 0.0, bg_app);
 
-                    // Global Search Icon
-                    let is_search = self.layout.active_activity_tab == ActivityBarTab::Search && self.layout.sidebar_visible;
-                    if ui.selectable_label(is_search, egui::RichText::new("🔍").size(18.0))
-                        .on_hover_text("Search across project")
-                        .clicked()
-                    {
-                        self.layout.set_activity_tab(ActivityBarTab::Search);
-                    }
-                    ui.add_space(8.0);
-
-                    // Source Control (Git) Icon
-                    let is_scm = self.layout.active_activity_tab == ActivityBarTab::SourceControl && self.layout.sidebar_visible;
-                    if ui.selectable_label(is_scm, egui::RichText::new("🌿").size(18.0))
-                        .on_hover_text("Source Control / Git")
-                        .clicked()
-                    {
-                        self.layout.set_activity_tab(ActivityBarTab::SourceControl);
-                    }
-                    ui.add_space(8.0);
-
-                    // Extensions / Plugins Icon
-                    let is_ext = self.layout.active_activity_tab == ActivityBarTab::Extensions && self.layout.sidebar_visible;
-                    if ui.selectable_label(is_ext, egui::RichText::new("🧩").size(18.0))
-                        .on_hover_text("Extensions & Toolchains")
-                        .clicked()
-                    {
-                        self.layout.set_activity_tab(ActivityBarTab::Extensions);
-                    }
-
-                    // Bottom Activity Icons (Settings)
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                        ui.add_space(8.0);
-                        if ui.button(egui::RichText::new("⚙").size(18.0))
-                            .on_hover_text("Settings")
-                            .clicked()
-                        {
-                            self.layout.toggle_settings();
-                        }
-                    });
-                },
-            );
-
-            ui.painter().line_segment(
-                [egui::pos2(ui.cursor().left(), ui.cursor().top()), egui::pos2(ui.cursor().left(), ui.cursor().top() + body_height)],
-                egui::Stroke::new(1.0, border_subtle),
-            );
-
-            // 2. PRIMARY SIDEBAR (Content based on active Activity Tab)
-            if self.layout.sidebar_visible {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(self.layout.sidebar_width, body_height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.painter().rect_filled(ui.max_rect(), 0.0, bg_sidebar);
+                ui_at_rect(ui, act_rect, |ui| {
+                    ui.vertical_centered(|ui| {
                         ui.add_space(6.0);
 
-                        match self.layout.active_activity_tab {
-                            ActivityBarTab::Explorer => {
-                                ui.horizontal(|ui| {
-                                    ui.add_space(8.0);
-                                    ui.label(egui::RichText::new("EXPLORER").strong().small());
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui.add_space(6.0);
-                                        if ui.small_button("➕").on_hover_text("New File").clicked() {
-                                            self.save_dialog_open = true;
-                                        }
-                                        if ui.small_button("🔄").on_hover_text("Refresh Tree").clicked() {
-                                            self.workspace.refresh_file_tree();
-                                        }
-                                    });
-                                });
-                                ui.add_space(2.0);
-                                ui.label(egui::RichText::new(format!("  ROOT: {}", WORKSPACE_DIR)).monospace().size(10.0).color(egui::Color32::GRAY));
-                                ui.separator();
-
-                                egui::ScrollArea::vertical().id_salt("sidebar_scroll").show(ui, |ui| {
-                                    let mut path_to_open = None;
-                                    let mut path_to_toggle = None;
-
-                                    Self::render_tree_nodes(
-                                        ui,
-                                        self.workspace.file_tree(),
-                                        &mut path_to_open,
-                                        &mut path_to_toggle,
-                                    );
-
-                                    if let Some(toggle_p) = path_to_toggle {
-                                        self.workspace.toggle_expand(&toggle_p);
-                                    }
-                                    if let Some(open_p) = path_to_open {
-                                        self.open_file_from_path(&open_p);
-                                    }
-                                });
-                            }
-                            ActivityBarTab::Search => {
-                                ui.horizontal(|ui| {
-                                    ui.add_space(8.0);
-                                    ui.label(egui::RichText::new("SEARCH").strong().small());
-                                });
-                                ui.separator();
-                                ui.add_space(4.0);
-                                ui.horizontal(|ui| {
-                                    ui.add_space(6.0);
-                                    ui.text_edit_singleline(&mut self.search_query);
-                                });
-                                ui.add_space(8.0);
-                                ui.label(egui::RichText::new("  Results in workspace:").small().color(egui::Color32::GRAY));
-                            }
-                            ActivityBarTab::SourceControl => {
-                                ui.horizontal(|ui| {
-                                    ui.add_space(8.0);
-                                    ui.label(egui::RichText::new("SOURCE CONTROL").strong().small());
-                                });
-                                ui.separator();
-                                ui.add_space(6.0);
-                                ui.label(egui::RichText::new("  Branch: main").small().strong().color(accent_lapce));
-                                ui.label(egui::RichText::new("  Workspace: Clean (Up to date)").small().color(egui::Color32::GRAY));
-                            }
-                            ActivityBarTab::Extensions => {
-                                ui.horizontal(|ui| {
-                                    ui.add_space(8.0);
-                                    ui.label(egui::RichText::new("EXTENSIONS & RUNNERS").strong().small());
-                                });
-                                ui.separator();
-                                ui.label(egui::RichText::new("  • Rust Toolchain (Native)").small());
-                                ui.label(egui::RichText::new("  • Java Dalvik (ECJ+D8)").small());
-                                ui.label(egui::RichText::new("  • Python 3 Local").small());
-                                ui.label(egui::RichText::new("  • Clang / C++ NDK").small());
-                            }
-                            ActivityBarTab::Settings => {}
+                        let is_exp = self.layout.active_activity_tab == ActivityBarTab::Explorer && self.layout.sidebar_visible;
+                        let exp_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
+                        if is_exp {
+                            ui.painter().rect_filled(exp_rect, 4.0, bg_sidebar);
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(egui::pos2(act_rect.left(), exp_rect.top() + 4.0), egui::vec2(2.5, 24.0)),
+                                1.0,
+                                accent_lapce,
+                            );
                         }
-                    },
-                );
+                        Codicon::Files.paint(ui, exp_rect, 20.0, if is_exp { fg_primary } else { fg_muted });
+                        if ui.interact(exp_rect, ui.id().with("act_files"), egui::Sense::click()).clicked() {
+                            self.layout.set_activity_tab(ActivityBarTab::Explorer);
+                        }
+                        ui.add_space(6.0);
+
+                        let is_search = self.layout.active_activity_tab == ActivityBarTab::Search && self.layout.sidebar_visible;
+                        let search_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
+                        if is_search {
+                            ui.painter().rect_filled(search_rect, 4.0, bg_sidebar);
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(egui::pos2(act_rect.left(), search_rect.top() + 4.0), egui::vec2(2.5, 24.0)),
+                                1.0,
+                                accent_lapce,
+                            );
+                        }
+                        Codicon::Search.paint(ui, search_rect, 20.0, if is_search { fg_primary } else { fg_muted });
+                        if ui.interact(search_rect, ui.id().with("act_search"), egui::Sense::click()).clicked() {
+                            self.layout.set_activity_tab(ActivityBarTab::Search);
+                        }
+                        ui.add_space(6.0);
+
+                        let is_scm = self.layout.active_activity_tab == ActivityBarTab::SourceControl && self.layout.sidebar_visible;
+                        let scm_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
+                        if is_scm {
+                            ui.painter().rect_filled(scm_rect, 4.0, bg_sidebar);
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(egui::pos2(act_rect.left(), scm_rect.top() + 4.0), egui::vec2(2.5, 24.0)),
+                                1.0,
+                                accent_lapce,
+                            );
+                        }
+                        Codicon::SourceControl.paint(ui, scm_rect, 20.0, if is_scm { fg_primary } else { fg_muted });
+                        if ui.interact(scm_rect, ui.id().with("act_scm"), egui::Sense::click()).clicked() {
+                            self.layout.set_activity_tab(ActivityBarTab::SourceControl);
+                        }
+                        ui.add_space(6.0);
+
+                        let is_ext = self.layout.active_activity_tab == ActivityBarTab::Extensions && self.layout.sidebar_visible;
+                        let ext_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
+                        if is_ext {
+                            ui.painter().rect_filled(ext_rect, 4.0, bg_sidebar);
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(egui::pos2(act_rect.left(), ext_rect.top() + 4.0), egui::vec2(2.5, 24.0)),
+                                1.0,
+                                accent_lapce,
+                            );
+                        }
+                        Codicon::Extensions.paint(ui, ext_rect, 20.0, if is_ext { fg_primary } else { fg_muted });
+                        if ui.interact(ext_rect, ui.id().with("act_ext"), egui::Sense::click()).clicked() {
+                            self.layout.set_activity_tab(ActivityBarTab::Extensions);
+                        }
+
+                        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                            ui.add_space(6.0);
+                            let set_rect = ui.allocate_space(egui::vec2(32.0, 32.0)).1;
+                            Codicon::Settings.paint(ui, set_rect, 20.0, fg_muted);
+                            if ui.interact(set_rect, ui.id().with("act_settings"), egui::Sense::click()).clicked() {
+                                self.layout.toggle_settings();
+                            }
+                        });
+                    });
+                });
 
                 ui.painter().line_segment(
-                    [egui::pos2(ui.cursor().left(), ui.cursor().top()), egui::pos2(ui.cursor().left(), ui.cursor().top() + body_height)],
+                    [egui::pos2(act_rect.right(), act_rect.top()), egui::pos2(act_rect.right(), act_rect.bottom())],
                     egui::Stroke::new(1.0, border_subtle),
                 );
-            }
 
-            // 3. EDITOR VIEW (Breadcrumbs + Lapce Tab Header + Editor Gutter)
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), body_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.painter().rect_filled(ui.max_rect(), 0.0, bg_editor);
+                if self.layout.sidebar_visible {
+                    let side_rect = egui::Rect::from_min_size(egui::pos2(act_rect.right() + 1.0, body_top), egui::vec2(self.layout.sidebar_width, body_height));
+                    ui.painter().rect_filled(side_rect, 0.0, bg_sidebar);
 
-                    // Lapce Tab Bar
-                    ui.horizontal(|ui| {
-                        ui.add_space(6.0);
-                        let tab_count = self.workspace.tabs().len();
-                        let mut tab_to_select = None;
-                        let mut tab_to_close = None;
+                    ui_at_rect(ui, side_rect, |ui| {
+                        ui.vertical(|ui| {
+                            ui.add_space(6.0);
+                            match self.layout.active_activity_tab {
+                                ActivityBarTab::Explorer => {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new("EXPLORER").strong().size(11.0).color(fg_muted));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            ui.add_space(6.0);
+                                            let r_rect = ui.allocate_space(egui::vec2(16.0, 16.0)).1;
+                                            Codicon::Refresh.paint(ui, r_rect, 14.0, fg_muted);
+                                            if ui.interact(r_rect, ui.id().with("side_ref"), egui::Sense::click()).clicked() {
+                                                self.workspace.refresh_file_tree();
+                                            }
+                                            let nf_rect = ui.allocate_space(egui::vec2(16.0, 16.0)).1;
+                                            Codicon::NewFile.paint(ui, nf_rect, 14.0, fg_muted);
+                                            if ui.interact(nf_rect, ui.id().with("side_nf"), egui::Sense::click()).clicked() {
+                                                self.save_dialog_open = true;
+                                            }
+                                        });
+                                    });
+                                    ui.add_space(2.0);
+                                    ui.painter().line_segment(
+                                        [egui::pos2(side_rect.left(), ui.cursor().top()), egui::pos2(side_rect.right(), ui.cursor().top())],
+                                        egui::Stroke::new(1.0, border_subtle),
+                                    );
+                                    ui.add_space(4.0);
 
-                        for (idx, tab) in self.workspace.tabs().iter().enumerate() {
-                            let is_active = idx == self.workspace.active_tab_idx();
-                            let title_text = if tab.is_dirty {
-                                format!("● {}", tab.title)
-                            } else {
-                                tab.title.clone()
-                            };
+                                    egui::ScrollArea::vertical().id_salt("sidebar_scroll").show(ui, |ui| {
+                                        let mut path_to_open = None;
+                                        let mut path_to_toggle = None;
 
-                            let tab_resp = ui.selectable_label(is_active, title_text);
-                            if tab_resp.clicked() {
-                                tab_to_select = Some(idx);
+                                        Self::render_tree_nodes(
+                                            ui,
+                                            self.workspace.file_tree(),
+                                            &mut path_to_open,
+                                            &mut path_to_toggle,
+                                            fg_primary,
+                                            fg_muted,
+                                            accent_lapce,
+                                        );
+
+                                        if let Some(toggle_p) = path_to_toggle {
+                                            self.workspace.toggle_expand(&toggle_p);
+                                        }
+                                        if let Some(open_p) = path_to_open {
+                                            self.open_file_from_path(&open_p);
+                                        }
+                                    });
+                                }
+                                ActivityBarTab::Search => {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new("SEARCH").strong().size(11.0).color(fg_muted));
+                                    });
+                                    ui.add_space(4.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(6.0);
+                                        ui.text_edit_singleline(&mut self.search_query);
+                                    });
+                                    ui.add_space(8.0);
+                                    ui.label(egui::RichText::new("  Results in workspace:").small().color(fg_muted));
+                                }
+                                ActivityBarTab::SourceControl => {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new("SOURCE CONTROL").strong().size(11.0).color(fg_muted));
+                                    });
+                                    ui.add_space(6.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0);
+                                        let b_rect = ui.allocate_space(egui::vec2(16.0, 16.0)).1;
+                                        Codicon::GitBranch.paint(ui, b_rect, 14.0, accent_lapce);
+                                        ui.label(egui::RichText::new("main").strong().size(12.0).color(accent_lapce));
+                                    });
+                                    ui.add_space(4.0);
+                                    ui.label(egui::RichText::new("  Workspace: Clean (Up to date)").small().color(fg_muted));
+                                }
+                                ActivityBarTab::Extensions => {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new("EXTENSIONS & RUNNERS").strong().size(11.0).color(fg_muted));
+                                    });
+                                    ui.add_space(6.0);
+                                    ui.label(egui::RichText::new("  • Rust Toolchain (Native)").small().color(fg_primary));
+                                    ui.label(egui::RichText::new("  • Java Dalvik (ECJ+D8)").small().color(fg_primary));
+                                    ui.label(egui::RichText::new("  • Python 3 Local").small().color(fg_primary));
+                                    ui.label(egui::RichText::new("  • Clang / C++ NDK").small().color(fg_primary));
+                                }
+                                ActivityBarTab::Settings => {}
                             }
+                        });
+                    });
 
-                            if tab_count > 1 {
-                                if ui.small_button("×").clicked() {
-                                    tab_to_close = Some(idx);
+                    ui.painter().line_segment(
+                        [egui::pos2(side_rect.right(), side_rect.top()), egui::pos2(side_rect.right(), side_rect.bottom())],
+                        egui::Stroke::new(1.0, border_subtle),
+                    );
+                }
+
+                let editor_x = if self.layout.sidebar_visible {
+                    act_width + self.layout.sidebar_width + 2.0
+                } else {
+                    act_width + 1.0
+                };
+                let editor_rect = egui::Rect::from_min_size(
+                    egui::pos2(editor_x, body_top),
+                    egui::vec2(full_rect.right() - editor_x, body_height),
+                );
+
+                ui_at_rect(ui, editor_rect, |ui| {
+                    ui.painter().rect_filled(editor_rect, 0.0, bg_editor);
+
+                    let tab_bar_height = 30.0;
+                    let tab_bar_rect = egui::Rect::from_min_size(editor_rect.min, egui::vec2(editor_rect.width(), tab_bar_height));
+                    ui.painter().rect_filled(tab_bar_rect, 0.0, bg_tabs);
+
+                    ui_at_rect(ui, tab_bar_rect, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.add_space(2.0);
+                            let tab_count = self.workspace.tabs().len();
+                            let mut tab_to_select = None;
+                            let mut tab_to_close = None;
+
+                            for (idx, tab) in self.workspace.tabs().iter().enumerate() {
+                                let is_active = idx == self.workspace.active_tab_idx();
+                                let tab_w = 140.0f32;
+                                let t_rect = ui.allocate_space(egui::vec2(tab_w, tab_bar_height)).1;
+
+                                if is_active {
+                                    ui.painter().rect_filled(t_rect, 0.0, bg_editor);
+                                    ui.painter().rect_filled(
+                                        egui::Rect::from_min_size(t_rect.min, egui::vec2(t_rect.width(), 2.0)),
+                                        0.0,
+                                        accent_lapce,
+                                    );
+                                }
+
+                                let ic_rect = egui::Rect::from_min_size(
+                                    egui::pos2(t_rect.left() + 6.0, t_rect.center().y - 7.0),
+                                    egui::vec2(14.0, 14.0),
+                                );
+                                Codicon::FileCode.paint(ui, ic_rect, 13.0, if is_active { accent_lapce } else { fg_muted });
+
+                                let title_text = if tab.is_dirty {
+                                    format!("{} •", tab.title)
+                                } else {
+                                    tab.title.clone()
+                                };
+                                ui.painter().text(
+                                    egui::pos2(t_rect.left() + 24.0, t_rect.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    title_text,
+                                    egui::FontId::proportional(12.5),
+                                    if is_active { fg_primary } else { fg_muted },
+                                );
+
+                                if tab_count > 1 {
+                                    let cl_rect = egui::Rect::from_min_size(
+                                        egui::pos2(t_rect.right() - 20.0, t_rect.center().y - 7.0),
+                                        egui::vec2(14.0, 14.0),
+                                    );
+                                    Codicon::Close.paint(ui, cl_rect, 11.0, fg_muted);
+                                    if ui.interact(cl_rect, ui.id().with(("tab_cl", idx)), egui::Sense::click()).clicked() {
+                                        tab_to_close = Some(idx);
+                                    }
+                                }
+
+                                if ui.interact(t_rect, ui.id().with(("tab_sel", idx)), egui::Sense::click()).clicked() {
+                                    tab_to_select = Some(idx);
                                 }
                             }
-                            ui.add_space(2.0);
-                        }
 
-                        if let Some(idx) = tab_to_select {
-                            self.workspace.select_tab(idx);
-                        }
-                        if let Some(idx) = tab_to_close {
-                            self.workspace.close_tab(idx);
-                        }
-                    });
-
-                    // Lapce Breadcrumbs Row
-                    ui.painter().line_segment(
-                        [egui::pos2(ui.cursor().left(), ui.cursor().top()), egui::pos2(full_rect.right(), ui.cursor().top())],
-                        egui::Stroke::new(1.0, border_subtle),
-                    );
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        let cur_path = self.workspace.active_tab()
-                            .and_then(|t| t.path.as_deref())
-                            .unwrap_or("ArtCraft > Untitled");
-                        ui.label(egui::RichText::new(cur_path).small().color(egui::Color32::from_rgb(140, 140, 160)));
+                            if let Some(idx) = tab_to_select {
+                                self.workspace.select_tab(idx);
+                            }
+                            if let Some(idx) = tab_to_close {
+                                self.workspace.close_tab(idx);
+                            }
+                        });
                     });
 
                     ui.painter().line_segment(
-                        [egui::pos2(ui.cursor().left(), ui.cursor().top()), egui::pos2(full_rect.right(), ui.cursor().top())],
+                        [egui::pos2(editor_rect.left(), tab_bar_rect.bottom()), egui::pos2(editor_rect.right(), tab_bar_rect.bottom())],
                         egui::Stroke::new(1.0, border_subtle),
                     );
 
-                    // Text Editor Canvas with Touch Scrolling
+                    let breadcrumb_height = 24.0;
+                    let breadcrumb_rect = egui::Rect::from_min_size(
+                        egui::pos2(editor_rect.left(), tab_bar_rect.bottom()),
+                        egui::vec2(editor_rect.width(), breadcrumb_height),
+                    );
+                    ui_at_rect(ui, breadcrumb_rect, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.add_space(8.0);
+                            let f_rect = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                            Codicon::Folder.paint(ui, f_rect, 13.0, fg_muted);
+                            ui.label(egui::RichText::new("ArtCraft").size(11.5).color(fg_muted));
+                            ui.label(egui::RichText::new(">").size(11.5).color(fg_muted));
+
+                            let fc_rect = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                            Codicon::FileCode.paint(ui, fc_rect, 13.0, accent_lapce);
+                            let cur_name = self.workspace.active_tab().map(|t| t.title.as_str()).unwrap_or("Untitled");
+                            ui.label(egui::RichText::new(cur_name).size(11.5).color(fg_primary));
+                        });
+                    });
+
+                    ui.painter().line_segment(
+                        [egui::pos2(editor_rect.left(), breadcrumb_rect.bottom()), egui::pos2(editor_rect.right(), breadcrumb_rect.bottom())],
+                        egui::Stroke::new(1.0, border_subtle),
+                    );
+
+                    let editor_body_top = breadcrumb_rect.bottom();
+                    let editor_body_rect = egui::Rect::from_min_size(
+                        egui::pos2(editor_rect.left(), editor_body_top),
+                        egui::vec2(editor_rect.width(), editor_rect.bottom() - editor_body_top),
+                    );
+
                     let mut file_content = if let Some(tab) = self.workspace.active_tab() {
                         tab.buffer.to_string()
                     } else {
                         String::new()
                     };
 
-                    egui::ScrollArea::both()
-                        .id_salt("editor_scroll")
-                        .auto_shrink([false, false])
-                        .scroll_source(egui::scroll_area::ScrollSource {
-                            mouse_wheel: true,
-                            drag: egui::scroll_area::DragScroll::Always,
-                            scroll_bar: true,
-                        })
-                        .show(ui, |ui| {
-                            let text_edit = egui::TextEdit::multiline(&mut file_content)
-                                .font(egui::TextStyle::Monospace)
-                                .code_editor()
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(38);
+                    let active_ext = self.workspace.active_tab()
+                        .and_then(|t| t.path.as_ref())
+                        .map(|p| Path::new(p).extension().and_then(|e| e.to_str()).unwrap_or("rs"))
+                        .unwrap_or("rs");
+                    let lang_id = LanguageId::from_extension(active_ext);
+                    let theme_clone = self.theme.clone();
 
-                            let resp = ui.add(text_edit);
-                            if resp.changed() {
-                                if let Some(tab) = self.workspace.active_tab_mut() {
-                                    tab.buffer = codecraft_core::buffer::DocumentBuffer::from_str(&file_content);
-                                    tab.is_dirty = true;
-                                    self.status_msg = "Modified".to_string();
-                                }
-                            }
-                        });
-                },
-            );
+                    let line_count = file_content.lines().count().max(1);
+                    let gutter_width = 46.0;
+
+                    ui_at_rect(ui, editor_body_rect, |ui| {
+                        egui::ScrollArea::both()
+                            .id_salt("editor_scroll_area")
+                            .auto_shrink([false, false])
+                            .scroll_source(egui::scroll_area::ScrollSource {
+                                mouse_wheel: true,
+                                drag: egui::scroll_area::DragScroll::Always,
+                                scroll_bar: true,
+                            })
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                                    let gutter_total_h = (line_count as f32) * row_h;
+                                    let g_rect = ui.allocate_space(egui::vec2(gutter_width, gutter_total_h)).1;
+                                    ui.painter().rect_filled(g_rect, 0.0, bg_app);
+                                    ui.painter().line_segment(
+                                        [egui::pos2(g_rect.right(), g_rect.top()), egui::pos2(g_rect.right(), g_rect.bottom())],
+                                        egui::Stroke::new(1.0, border_subtle),
+                                    );
+
+                                    for i in 1..=line_count {
+                                        let y = g_rect.top() + (i as f32 - 1.0) * row_h + row_h * 0.5;
+                                        ui.painter().text(
+                                            egui::pos2(g_rect.right() - 8.0, y),
+                                            egui::Align2::RIGHT_CENTER,
+                                            format!("{}", i),
+                                            egui::FontId::monospace(13.0),
+                                            fg_muted,
+                                        );
+                                    }
+
+                                    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
+                                        let job = codecraft_ui::render_syntax_job(buf.as_str(), lang_id, &theme_clone, 14.0, f32::INFINITY);
+                                        ui.painter().layout_job(job)
+                                    };
+
+                                    let text_edit = egui::TextEdit::multiline(&mut file_content)
+                                        .font(egui::TextStyle::Monospace)
+                                        .code_editor()
+                                        .layouter(&mut layouter)
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(38);
+
+                                    let resp = ui.add(text_edit);
+                                    if resp.changed() {
+                                        if let Some(tab) = self.workspace.active_tab_mut() {
+                                            tab.buffer = codecraft_core::buffer::DocumentBuffer::from_str(&file_content);
+                                            tab.is_dirty = true;
+                                            self.status_msg = "Modified".to_string();
+                                        }
+                                    }
+                                });
+                            });
+                    });
+                });
+            });
         });
 
-        // 4. VIRTUAL TOUCH ACCESSORY BAR (Optional Toggle)
         if self.layout.accessory_bar_visible {
+            let acc_rect = egui::Rect::from_min_size(
+                egui::pos2(full_rect.left(), full_rect.bottom() - term_height - 24.0 - accessory_height),
+                egui::vec2(full_rect.width(), accessory_height),
+            );
+            ui.painter().rect_filled(acc_rect, 0.0, bg_sidebar);
             ui.painter().line_segment(
-                [egui::pos2(full_rect.left(), ui.cursor().top()), egui::pos2(full_rect.right(), ui.cursor().top())],
+                [egui::pos2(acc_rect.left(), acc_rect.top()), egui::pos2(acc_rect.right(), acc_rect.top())],
                 egui::Stroke::new(1.0, border_subtle),
             );
-            ui.horizontal(|ui| {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("⌨ Touch:").small().color(egui::Color32::GRAY));
-                let symbols = ["Tab", "{", "}", "(", ")", "[", "]", ";", ":", "\"", "'", "->", "=>", "=", "<", ">"];
-                for sym in symbols {
-                    if ui.button(sym).clicked() {
-                        self.insert_symbol(sym);
+
+            ui_at_rect(ui, acc_rect, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Touch:").small().color(fg_muted));
+                    let symbols = ["Tab", "{", "}", "(", ")", "[", "]", ";", ":", "\"", "'", "->", "=>", "=", "<", ">"];
+                    for sym in symbols {
+                        if ui.button(sym).clicked() {
+                            self.insert_symbol(sym);
+                        }
                     }
-                }
+                });
             });
         }
 
-        // 5. LAPCE BOTTOM DOCK PANEL (Terminal / Output / Problems Tabs)
         if self.layout.terminal_visible {
+            let dock_top = full_rect.bottom() - 24.0 - term_height;
+            let dock_rect = egui::Rect::from_min_size(egui::pos2(full_rect.left(), dock_top), egui::vec2(full_rect.width(), term_height));
+            ui.painter().rect_filled(dock_rect, 0.0, bg_terminal);
             ui.painter().line_segment(
-                [egui::pos2(full_rect.left(), ui.cursor().top()), egui::pos2(full_rect.right(), ui.cursor().top())],
+                [egui::pos2(dock_rect.left(), dock_rect.top()), egui::pos2(dock_rect.right(), dock_rect.top())],
                 egui::Stroke::new(1.0, border_subtle),
             );
 
-            ui.allocate_ui_with_layout(
-                egui::vec2(full_rect.width(), self.layout.terminal_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.painter().rect_filled(ui.max_rect(), 0.0, bg_terminal);
-
-                    // Dock Header Tabs (Lapce Style)
-                    ui.horizontal(|ui| {
+            ui_at_rect(ui, dock_rect, |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal_centered(|ui| {
                         ui.add_space(8.0);
                         let is_term = self.layout.active_dock_tab == BottomDockTab::Terminal;
+                        let t_ic = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                        Codicon::Terminal.paint(ui, t_ic, 13.0, if is_term { accent_lapce } else { fg_muted });
                         if ui.selectable_label(is_term, "TERMINAL").clicked() {
                             self.layout.active_dock_tab = BottomDockTab::Terminal;
                         }
+
                         let is_out = self.layout.active_dock_tab == BottomDockTab::Output;
+                        let o_ic = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                        Codicon::FileCode.paint(ui, o_ic, 13.0, if is_out { accent_lapce } else { fg_muted });
                         if ui.selectable_label(is_out, "OUTPUT").clicked() {
                             self.layout.active_dock_tab = BottomDockTab::Output;
                         }
+
                         let is_prob = self.layout.active_dock_tab == BottomDockTab::Problems;
+                        let p_ic = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                        Codicon::Error.paint(ui, p_ic, 13.0, if is_prob { accent_lapce } else { fg_muted });
                         if ui.selectable_label(is_prob, "PROBLEMS").clicked() {
                             self.layout.active_dock_tab = BottomDockTab::Problems;
                         }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.add_space(8.0);
-                            if ui.button("× Close").clicked() {
+                            let cl_btn = ui.allocate_space(egui::vec2(16.0, 16.0)).1;
+                            Codicon::Close.paint(ui, cl_btn, 13.0, fg_muted);
+                            if ui.interact(cl_btn, ui.id().with("dock_close"), egui::Sense::click()).clicked() {
                                 self.layout.terminal_visible = false;
                             }
+                            ui.add_space(8.0);
                             if ui.button("Clear").clicked() {
                                 self.terminal_logs.clear();
                             }
                         });
                     });
 
-                    ui.separator();
+                    ui.painter().line_segment(
+                        [egui::pos2(dock_rect.left(), ui.cursor().top()), egui::pos2(dock_rect.right(), ui.cursor().top())],
+                        egui::Stroke::new(1.0, border_subtle),
+                    );
 
                     egui::ScrollArea::vertical()
                         .id_salt("dock_scroll")
@@ -556,7 +737,7 @@ impl eframe::App for CodeCraftApp {
                         .show(ui, |ui| {
                             for (stype, text) in &self.terminal_logs {
                                 let color = match stype {
-                                    StreamType::Stdout => egui::Color32::from_rgb(220, 220, 230),
+                                    StreamType::Stdout => fg_primary,
                                     StreamType::Stderr => egui::Color32::from_rgb(244, 63, 94),
                                     StreamType::SystemNotice => accent_em,
                                 };
@@ -564,7 +745,6 @@ impl eframe::App for CodeCraftApp {
                             }
                         });
 
-                    // Prompt Input
                     ui.horizontal(|ui| {
                         ui.add_space(6.0);
                         ui.label(egui::RichText::new("$").monospace().strong().color(accent_lapce));
@@ -584,74 +764,112 @@ impl eframe::App for CodeCraftApp {
                             }
                         }
                     });
-                },
-            );
+                });
+            });
         }
 
-        // 6. LAPCE STATUS BAR (Footer)
+        let status_rect = egui::Rect::from_min_size(
+            egui::pos2(full_rect.left(), full_rect.bottom() - 24.0),
+            egui::vec2(full_rect.width(), 24.0),
+        );
+        ui.painter().rect_filled(status_rect, 0.0, bg_app);
         ui.painter().line_segment(
-            [egui::pos2(full_rect.left(), ui.cursor().top()), egui::pos2(full_rect.right(), ui.cursor().top())],
+            [egui::pos2(status_rect.left(), status_rect.top()), egui::pos2(status_rect.right(), status_rect.top())],
             egui::Stroke::new(1.0, border_subtle),
         );
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            // Git Branch Status
-            ui.label(egui::RichText::new("🌿 main").small().color(accent_lapce));
-            ui.separator();
-            let cur_file = self.workspace.active_tab().map(|t| t.title.as_str()).unwrap_or("No file");
-            ui.label(egui::RichText::new(format!("File: {}", cur_file)).small());
-            ui.separator();
-            ui.label(egui::RichText::new(format!("Theme: {}", self.theme.name)).small());
-            ui.separator();
-            ui.label(egui::RichText::new("UTF-8").small());
-            ui.separator();
-            ui.label(egui::RichText::new("Rust ARM64").small());
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(&self.status_msg).small().color(egui::Color32::LIGHT_GRAY));
+        let ctx = ui.ctx().clone();
+        ui_at_rect(ui, status_rect, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.add_space(6.0);
+                let rm_rect = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                Codicon::Remote.paint(ui, rm_rect, 13.0, accent_lapce);
+                ui.label(egui::RichText::new("Local").small().color(accent_lapce));
+                ui.separator();
+
+                let gb_rect = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                Codicon::GitBranch.paint(ui, gb_rect, 13.0, fg_muted);
+                ui.label(egui::RichText::new("main").small().color(fg_primary));
+                ui.separator();
+
+                let err_rect = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                Codicon::Error.paint(ui, err_rect, 12.0, fg_muted);
+                ui.label(egui::RichText::new("0").small().color(fg_muted));
+
+                let warn_rect = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                Codicon::Warning.paint(ui, warn_rect, 12.0, fg_muted);
+                ui.label(egui::RichText::new("0").small().color(fg_muted));
+
+                ui.separator();
+                ui.label(egui::RichText::new(&self.status_msg).small().color(fg_muted));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Rust ARM64").small().color(fg_muted));
+                    ui.separator();
+                    ui.label(egui::RichText::new("UTF-8").small().color(fg_muted));
+                    ui.separator();
+                    let cur_lang = self.workspace.active_tab()
+                        .and_then(|t| t.path.as_ref())
+                        .map(|p| match Path::new(p).extension().and_then(|e| e.to_str()).unwrap_or("") {
+                            "rs" => "Rust",
+                            "java" => "Java",
+                            "py" => "Python",
+                            "c" | "cpp" => "C/C++",
+                            _ => "Plain Text",
+                        })
+                        .unwrap_or("Rust");
+                    ui.label(egui::RichText::new(cur_lang).small().color(fg_primary));
+                    ui.separator();
+                    ui.label(egui::RichText::new(&self.theme.name).small().color(fg_muted));
+                });
             });
         });
 
-        // 7. LAPCE COMMAND PALETTE MODAL (Ctrl+P / Search bar click)
-        let ctx = ui.ctx().clone();
         if self.layout.command_palette_open {
-            egui::Window::new("❖ Command Palette")
+            egui::Window::new("Command Palette")
                 .collapsible(false)
                 .resizable(false)
-                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 50.0))
+                .title_bar(false)
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 44.0))
+                .fixed_size(egui::vec2(440.0, 320.0))
                 .show(&ctx, |ui| {
-                    ui.set_width(450.0);
                     ui.horizontal(|ui| {
-                        ui.label(">");
-                        ui.text_edit_singleline(&mut self.palette_filter);
+                        let sc_rect = ui.allocate_space(egui::vec2(16.0, 16.0)).1;
+                        Codicon::Search.paint(ui, sc_rect, 14.0, accent_lapce);
+                        let text_resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.palette_filter)
+                                .hint_text("Type a command or file name...")
+                                .desired_width(f32::INFINITY),
+                        );
+                        if text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.layout.command_palette_open = false;
+                        }
                     });
+
                     ui.separator();
 
                     let commands = [
-                        ("📁 View: Toggle Primary Sidebar", "Ctrl+B"),
-                        ("💻 View: Toggle Integrated Terminal", "Ctrl+J"),
-                        ("💾 File: Save Current File", "Ctrl+S"),
-                        ("➕ File: Create New File", ""),
-                        ("▶ Run: Execute Active Script", ""),
-                        ("⚙ Preferences: Open Settings", ""),
+                        ("View: Toggle Primary Sidebar", "Ctrl+B"),
+                        ("View: Toggle Integrated Terminal", "Ctrl+J"),
+                        ("File: Save Current File", "Ctrl+S"),
+                        ("File: Create New File", "Ctrl+N"),
+                        ("Run: Execute Active Script", "F5"),
+                        ("Preferences: Open Settings", "Ctrl+,"),
                     ];
 
-                    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                        for (cmd_title, shortcut) in commands {
-                            if self.palette_filter.is_empty()
-                                || cmd_title.to_lowercase().contains(&self.palette_filter.to_lowercase())
-                            {
+                    let filter_lower = self.palette_filter.to_lowercase();
+                    egui::ScrollArea::vertical().max_height(230.0).show(ui, |ui| {
+                        for (cmd, shortcut) in commands {
+                            if filter_lower.is_empty() || cmd.to_lowercase().contains(&filter_lower) {
                                 ui.horizontal(|ui| {
-                                    if ui.button(cmd_title).clicked() {
-                                        self.handle_palette_command(cmd_title);
+                                    if ui.selectable_label(false, cmd).clicked() {
+                                        self.handle_palette_command(cmd);
                                         self.layout.command_palette_open = false;
                                     }
-                                    if !shortcut.is_empty() {
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            ui.label(egui::RichText::new(shortcut).small().color(egui::Color32::GRAY));
-                                        });
-                                    }
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        ui.label(egui::RichText::new(shortcut).small().color(fg_muted));
+                                    });
                                 });
                             }
                         }
@@ -663,15 +881,14 @@ impl eframe::App for CodeCraftApp {
                 });
         }
 
-        // 8. SETTINGS MODAL
         if self.layout.settings_open {
-            egui::Window::new("⚙ Lapce Settings")
+            egui::Window::new("Lapce Settings")
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(&ctx, |ui| {
                     ui.heading("Touch & Keyboard");
                     ui.checkbox(&mut self.layout.accessory_bar_visible, "Show Virtual Touch Bar");
-                    ui.label(egui::RichText::new("(Disable when using MatePad magnetic keyboard)").small().color(egui::Color32::GRAY));
+                    ui.label(egui::RichText::new("(Disable when using MatePad magnetic keyboard)").small().color(fg_muted));
                     ui.add_space(10.0);
 
                     ui.heading("Editor Theme");
@@ -697,7 +914,6 @@ impl eframe::App for CodeCraftApp {
                 });
         }
 
-        // 9. NEW FILE MODAL
         if self.save_dialog_open {
             egui::Window::new("New File")
                 .collapsible(false)
@@ -750,33 +966,46 @@ impl CodeCraftApp {
         nodes: &[FileTreeNode],
         path_to_open: &mut Option<PathBuf>,
         path_to_toggle: &mut Option<PathBuf>,
+        fg_primary: egui::Color32,
+        fg_muted: egui::Color32,
+        accent: egui::Color32,
     ) {
         for node in nodes {
             if node.is_dir {
-                let icon = if node.is_expanded { "📂" } else { "📁" };
-                let label = format!("{} {}", icon, node.name);
-                if ui.selectable_label(false, label).clicked() {
-                    *path_to_toggle = Some(node.path.clone());
-                }
+                ui.horizontal(|ui| {
+                    let d_rect = ui.allocate_space(egui::vec2(12.0, 14.0)).1;
+                    if node.is_expanded {
+                        Codicon::ChevronDown.paint(ui, d_rect, 10.0, fg_muted);
+                    } else {
+                        Codicon::ChevronRight.paint(ui, d_rect, 10.0, fg_muted);
+                    }
+
+                    let f_rect = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                    if node.is_expanded {
+                        Codicon::FolderOpened.paint(ui, f_rect, 13.0, accent);
+                    } else {
+                        Codicon::Folder.paint(ui, f_rect, 13.0, fg_muted);
+                    }
+
+                    if ui.selectable_label(false, egui::RichText::new(&node.name).size(12.0).color(fg_primary)).clicked() {
+                        *path_to_toggle = Some(node.path.clone());
+                    }
+                });
+
                 if node.is_expanded {
                     ui.indent(&node.name, |ui| {
-                        Self::render_tree_nodes(ui, &node.children, path_to_open, path_to_toggle);
+                        Self::render_tree_nodes(ui, &node.children, path_to_open, path_to_toggle, fg_primary, fg_muted, accent);
                     });
                 }
             } else {
-                let ext = node.path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                let icon = match ext {
-                    "rs" => "🦀",
-                    "java" => "☕",
-                    "py" => "🐍",
-                    "c" | "cpp" | "h" => "⚙",
-                    "json" | "toml" => "📋",
-                    _ => "📄",
-                };
-                let label = format!("{} {}", icon, node.name);
-                if ui.selectable_label(false, label).clicked() {
-                    *path_to_open = Some(node.path.clone());
-                }
+                ui.horizontal(|ui| {
+                    ui.add_space(14.0);
+                    let fc_rect = ui.allocate_space(egui::vec2(14.0, 14.0)).1;
+                    Codicon::FileCode.paint(ui, fc_rect, 12.0, fg_muted);
+                    if ui.selectable_label(false, egui::RichText::new(&node.name).size(12.0).color(fg_primary)).clicked() {
+                        *path_to_open = Some(node.path.clone());
+                    }
+                });
             }
         }
     }
@@ -908,30 +1137,23 @@ impl CodeCraftApp {
                         }
                         let _ = capture.send(codecraft_toolchain::runner::ExecutionStreamChunk {
                             stream_type: StreamType::SystemNotice,
-                            content: format!("[Process exited: {:?}]\n", out.status.code()),
+                            content: format!("Exit code: {:?}\n", out.status.code()),
                         });
                     }
                     Err(e) => {
                         let _ = capture.send(codecraft_toolchain::runner::ExecutionStreamChunk {
                             stream_type: StreamType::Stderr,
-                            content: format!("Execution failed: {}\n", e),
+                            content: format!("Failed to execute command: {}\n", e),
                         });
                     }
                 }
             });
         } else {
-            self.terminal_capture.emit_system(format!(
-                "Notice: No runner configured for extension '{}'. Add it in runner.toml.\n",
-                file_path.extension().and_then(|e| e.to_str()).unwrap_or("")
-            ));
+            self.terminal_capture.emit_system(format!("No runner configured for file: {}\n", tab_title));
         }
     }
 
     fn execute_terminal_command(&mut self, cmd: &str) {
-        if cmd == "help" {
-            self.terminal_capture.emit_system("Commands: help, clear, ls, pwd, cat <file>, sh <command>\n");
-            return;
-        }
         if cmd == "clear" {
             self.terminal_logs.clear();
             return;
